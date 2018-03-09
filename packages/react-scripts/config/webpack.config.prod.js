@@ -13,7 +13,8 @@ const path = require('path');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const UglifyJsPlugin = require('uglifyjs-webpack-plugin');
-const ExtractTextPlugin = require('extract-text-webpack-plugin');
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+const OptimizeCSSAssetsPlugin = require('optimize-css-assets-webpack-plugin');
 const ManifestPlugin = require('webpack-manifest-plugin');
 const InterpolateHtmlPlugin = require('react-dev-utils/InterpolateHtmlPlugin');
 const SWPrecacheWebpackPlugin = require('sw-precache-webpack-plugin');
@@ -26,9 +27,6 @@ const getClientEnvironment = require('./env');
 // Webpack uses `publicPath` to determine where the app is being served from.
 // It requires a trailing slash, or the file assets will get an incorrect path.
 const publicPath = paths.servedPath;
-// Some apps do not use client-side routing with pushState.
-// For these, "homepage" can be set to "." to enable relative asset paths.
-const shouldUseRelativeAssetPaths = publicPath === './';
 // Source maps are resource heavy and can cause out of memory issue for large source files.
 const shouldUseSourceMap = process.env.GENERATE_SOURCEMAP !== 'false';
 // `publicUrl` is just like `publicPath`, but we will provide it to our app
@@ -43,18 +41,6 @@ const env = getClientEnvironment(publicUrl);
 if (env.stringified['process.env'].NODE_ENV !== '"production"') {
   throw new Error('Production builds must have NODE_ENV=production.');
 }
-
-// Note: defined here because it will be used more than once.
-const cssFilename = 'static/css/[name].[contenthash:8].css';
-
-// ExtractTextPlugin expects the build output to be flat.
-// (See https://github.com/webpack-contrib/extract-text-webpack-plugin/issues/27)
-// However, our output is structured with css, js and media folders.
-// To have this structure working with relative paths, we have to use custom options.
-const extractTextPluginOptions = shouldUseRelativeAssetPaths
-  ? // Making sure that the publicPath goes back to to build folder.
-    { publicPath: Array(cssFilename.split('/').length).join('../') }
-  : {};
 
 // Options for PostCSS as we reference these options twice
 // Adds vendor prefixing based on your specified browser support in
@@ -181,6 +167,7 @@ module.exports = {
         cache: true,
         sourceMap: shouldUseSourceMap,
       }),
+      new OptimizeCSSAssetsPlugin(),
     ],
     // Automatically split vendor and commons
     // https://twitter.com/wSokra/status/969633336732905474
@@ -336,75 +323,49 @@ module.exports = {
               },
             ],
           },
-          // The notation here is somewhat confusing.
           // "postcss" loader applies autoprefixer to our CSS.
           // "css" loader resolves paths in CSS and adds assets as dependencies.
-          // "style" loader normally turns CSS into JS modules injecting <style>,
-          // but unlike in development configuration, we do something different.
-          // `ExtractTextPlugin` first applies the "postcss" and "css" loaders
-          // (second argument), then grabs the result CSS and puts it into a
-          // separate file in our build process. This way we actually ship
-          // a single CSS file in production instead of JS code injecting <style>
-          // tags. If you use code splitting, however, any async bundles will still
-          // use the "style" loader inside the async code so CSS from them won't be
-          // in the main CSS file.
+          // `MiniCSSExtractPlugin` extracts styles into CSS
+          // files. If you use code splitting, async bundles will have their own separate CSS chunk file.
           // By default we support CSS Modules with the extension .module.css
           {
-            test: cssRegex,
-            exclude: cssModuleRegex,
-            loader: getStyleLoaders({
-              importLoaders: 1,
-              minimize: true,
-              sourceMap: shouldUseSourceMap,
-            }),
-            // Note: this won't work without `new ExtractTextPlugin()` in `plugins`.
+            test: /\.css$/,
+            exclude: /\.module\.css$/,
+            use: [
+              MiniCssExtractPlugin.loader,
+              {
+                loader: require.resolve('css-loader'),
+                options: {
+                  importLoaders: 1,
+                  sourceMap: shouldUseSourceMap,
+                },
+              },
+              {
+                loader: require.resolve('postcss-loader'),
+                options: postCSSLoaderOptions,
+              },
+            ],
           },
           // Adds support for CSS Modules (https://github.com/css-modules/css-modules)
           // using the extension .module.css
           {
-            test: cssRegex,
-            loader: getStyleLoaders({
-              importLoaders: 1,
-              minimize: true,
-              sourceMap: shouldUseSourceMap,
-              modules: true,
-              getLocalIdent: getCSSModuleLocalIdent,
-            }),
-            // Note: this won't work without `new ExtractTextPlugin()` in `plugins`.
-          },
-          // Opt-in support for SASS. The logic here is somewhat similar
-          // as in the CSS routine, except that "sass-loader" runs first
-          // to compile SASS files into CSS.
-          // By default we support SASS Modules with the
-          // extensions .module.scss or .module.sass
-          {
-            test: sassRegex,
-            exclude: sassModuleRegex,
-            loader: getStyleLoaders(
+            test: /\.module\.css$/,
+            use: [
+              MiniCssExtractPlugin.loader,
               {
-                importLoaders: 2,
-                minimize: true,
-                sourceMap: shouldUseSourceMap,
+                loader: require.resolve('css-loader'),
+                options: {
+                  importLoaders: 1,
+                  sourceMap: shouldUseSourceMap,
+                  modules: true,
+                  localIdentName: getCSSModuleLocalIdent,
+                },
               },
-              'sass-loader'
-            ),
-            // Note: this won't work without `new ExtractTextPlugin()` in `plugins`.
-          },
-          // Adds support for CSS Modules, but using SASS
-          // using the extension .module.scss or .module.sass
-          {
-            test: sassModuleRegex,
-            loader: getStyleLoaders(
               {
-                importLoaders: 2,
-                minimize: true,
-                sourceMap: shouldUseSourceMap,
-                modules: true,
-                getLocalIdent: getCSSModuleLocalIdent,
+                loader: require.resolve('postcss-loader'),
+                options: postCSSLoaderOptions,
               },
-              'sass-loader'
-            ),
-            // Note: this won't work without `new ExtractTextPlugin()` in `plugins`.
+            ],
           },
           // The GraphQL loader preprocesses GraphQL queries in .graphql files.
           {
@@ -461,13 +422,11 @@ module.exports = {
     // It is absolutely essential that NODE_ENV was set to production here.
     // Otherwise React will be compiled in the very slow development mode.
     new webpack.DefinePlugin(env.stringified),
-    // Note: this won't work without ExtractTextPlugin.extract(..) in `loaders`.
-    new ExtractTextPlugin({
-      filename: cssFilename,
-      // allChunks: true because we want all css to be included in the main
-      // css bundle when doing code splitting to avoid FOUC:
-      // https://github.com/facebook/create-react-app/issues/2415
-      allChunks: true,
+    new MiniCssExtractPlugin({
+      // Options similar to the same options in webpackOptions.output
+      // both options are optional
+      filename: 'static/css/[name].[contenthash:8].css',
+      chunkFilename: 'static/css/[name].[contenthash:8].chunk.css',
     }),
     // Generate a manifest file which contains a mapping of all asset filenames
     // to their corresponding output file so that tools can pick it up without
